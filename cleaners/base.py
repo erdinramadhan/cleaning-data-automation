@@ -137,3 +137,52 @@ def safe_int(value, default: int = 0) -> int:
 def safe_int_abs(value, default: int = 0) -> int:
     """Same as safe_int tapi return absolute value (untuk diskon yang negatif)."""
     return abs(safe_int(value, default))
+
+
+def normalize_phone_id(value) -> Optional[str]:
+    """
+    Normalize nomor telepon Indonesia ke format '62xxxxxxxxxx'.
+    
+    Handle berbagai format input:
+    - 6281234567890       -> 6281234567890   (already correct)
+    - +6281234567890      -> 6281234567890   (strip "+")
+    - 081234567890        -> 6281234567890   (0xx -> 62xx)
+    - 81234567890         -> 6281234567890   (prepend 62)
+    - 6281234567890.0     -> 6281234567890   (strip float decimal suffix)
+    - "(+62)812***890"    -> None            (masked, gak bisa dipakai)
+    - ""  / None / NaN    -> None
+    - format invalid      -> None
+    
+    Length validation (Indonesia phone setelah normalize ke 62xxx):
+    - 11 digit (62811xxxxxx)    -> valid (Telkomsel/Indosat lama)
+    - 12-14 digit               -> valid
+    - lainnya                   -> None (corrupt)
+    
+    Returns: string format '62xxxxxxxxxx' atau None.
+    """
+    if value is None or pd.isna(value):
+        return None
+    
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return None
+    
+    # Strip float decimal suffix (".0", ".00", dll) yang muncul karena
+    # pandas baca number sebagai float
+    s = s.split(".")[0]
+    
+    # Strip semua karakter non-digit (kurung, plus, spasi, dash, dll)
+    digits = re.sub(r"[^0-9]", "", s)
+    
+    if not digits:
+        return None
+    
+    # Normalize ke format 62xxx
+    if digits.startswith("62") and 11 <= len(digits) <= 15:
+        return digits
+    elif digits.startswith("08") and 10 <= len(digits) <= 13:
+        return "62" + digits[1:]
+    elif digits.startswith("8") and 9 <= len(digits) <= 12:
+        return "62" + digits
+    else:
+        return None

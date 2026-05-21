@@ -13,6 +13,7 @@ from .base import (
     parse_price_string,
     safe_str,
     safe_int,
+    normalize_phone_id,
 )
 from config import hash_pii
 from schemas import OrderHeader, OrderItem, OrderBundle, normalize_status
@@ -200,6 +201,9 @@ class DestyCleaner(BaseCleaner):
                     
                     customer_name_hash=hash_pii(customer_name),
                     customer_phone_hash=hash_pii(customer_phone),
+                    
+                    customer_name=safe_str(customer_name),
+                    customer_phone=normalize_phone_id(customer_phone),
                     
                     raw_data={"header_source_row": first.dropna().to_dict()},
                     source_file=source_file,

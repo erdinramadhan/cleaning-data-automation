@@ -84,9 +84,13 @@ class OrderHeader(BaseModel):
     shipping_city: Optional[str] = None
     shipping_province: Optional[str] = None
     
-    # Customer (hashed)
+    # Customer (hashed - legacy, untuk backward compat)
     customer_name_hash: Optional[str] = None
     customer_phone_hash: Optional[str] = None
+    
+    # Customer (plain - normalized, untuk dedup analytics)
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None  # format: 62xxxxxxxxxx
     
     # Audit
     raw_data: Optional[dict[str, Any]] = None
