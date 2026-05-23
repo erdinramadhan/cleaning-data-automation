@@ -53,6 +53,9 @@ SUPABASE_KEY = _get_secret("SUPABASE_KEY")
 # Salt buat hashing PII
 PII_HASH_SALT = _get_secret("PII_HASH_SALT", "default-change-me")
 
+# Password gate buat protect destructive actions (push to Supabase)
+APP_UPLOAD_PASSWORD = _get_secret("APP_UPLOAD_PASSWORD")
+
 
 def hash_pii(value: str) -> str:
     """
@@ -92,5 +95,7 @@ def validate_config() -> tuple[bool, str]:
         return False, "SUPABASE_KEY belum di-set (cek .env lokal atau Streamlit Secrets)"
     if PII_HASH_SALT == "default-change-me":
         return False, "PII_HASH_SALT masih default! Ganti di .env atau Streamlit Secrets"
+    if not APP_UPLOAD_PASSWORD:
+        return False, "APP_UPLOAD_PASSWORD belum di-set (cek .env lokal atau Streamlit Secrets)"
     
     return True, "OK"

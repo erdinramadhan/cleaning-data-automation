@@ -11,7 +11,7 @@ from pathlib import Path
 
 from cleaners import detect_marketplace, ALL_CLEANERS
 from loader import push_to_supabase, test_connection
-from config import validate_config
+from config import validate_config, APP_UPLOAD_PASSWORD
 
 
 # ============================================================
@@ -263,54 +263,85 @@ dry_run = st.checkbox(
     help="Validate aja tanpa write ke DB",
 )
 
-if st.button("PUSH ke DBnya Trilogy Artisan", type="primary", disabled=dry_run):
-    if not dry_run:
-        with st.spinner(f"Pushing {len(bundles):,} orders..."):
-            try:
-                result = push_to_supabase(bundles)
-                
-                # Show validation result
-                v = result.get("validation", {})
-                if v.get("errors"):
-                    st.warning(f"⚠️ {len(v['errors'])} validation errors")
-                    with st.expander("Validation errors"):
-                        for err in v["errors"][:10]:
-                            st.write(f"- Order {err.get('order_id')}: {err.get('error')[:200]}")
-                
-                # Products
-                p = result.get("products", {})
-                if p:
-                    st.success(f"📦 Products: **{p.get('new', 0)} new** SKUs added")
-                
-                # Upsert
-                u = result.get("upsert", {})
-                if u:
-                    st.success(
-                        f"✅ Inserted: **{u['orders_upserted']:,}** orders + "
-                        f"**{u['items_inserted']:,}** line items"
-                    )
+# Tombol Push (trigger password prompt)
+if st.button("🚀 Push to Supabase", type="primary", disabled=dry_run):
+    st.session_state["show_password_prompt"] = True
+
+# Password gate prompt
+if st.session_state.get("show_password_prompt", False) and not dry_run:
+    st.warning("🔒 **Confirm: Push ke Supabase butuh password**")
+    
+    password_input = st.text_input(
+        "Password",
+        type="password",
+        key="push_password_input",
+        placeholder="Masukin password buat lanjut...",
+    )
+    
+    col1, col2, _ = st.columns([1, 1, 4])
+    with col1:
+        confirm = st.button("✅ Confirm", type="primary")
+    with col2:
+        cancel = st.button("❌ Cancel")
+    
+    if cancel:
+        st.session_state["show_password_prompt"] = False
+        st.rerun()
+    
+    if confirm:
+        if not APP_UPLOAD_PASSWORD:
+            st.error("⚠️ APP_UPLOAD_PASSWORD belum di-set di Secrets. Hubungi admin.")
+        elif password_input != APP_UPLOAD_PASSWORD:
+            st.error("❌ Password salah. Coba lagi.")
+        else:
+            # Password bener, lanjut push
+            st.session_state["show_password_prompt"] = False
+            with st.spinner(f"Pushing {len(bundles):,} orders..."):
+                try:
+                    result = push_to_supabase(bundles)
                     
-                    if u.get("errors"):
-                        st.error(f"⚠️ {len(u['errors'])} errors during upsert")
-                        with st.expander("Upsert errors"):
-                            for err in u["errors"][:10]:
-                                st.write(f"- {err}")
+                    # Show validation result
+                    v = result.get("validation", {})
+                    if v.get("errors"):
+                        st.warning(f"⚠️ {len(v['errors'])} validation errors")
+                        with st.expander("Validation errors"):
+                            for err in v["errors"][:10]:
+                                st.write(f"- Order {err.get('order_id')}: {err.get('error')[:200]}")
+                    
+                    # Products
+                    p = result.get("products", {})
+                    if p:
+                        st.success(f"📦 Products: **{p.get('new', 0)} new** SKUs added")
+                    
+                    # Upsert
+                    u = result.get("upsert", {})
+                    if u:
+                        st.success(
+                            f"✅ Inserted: **{u['orders_upserted']:,}** orders + "
+                            f"**{u['items_inserted']:,}** line items"
+                        )
+                        
+                        if u.get("errors"):
+                            st.error(f"⚠️ {len(u['errors'])} errors during upsert")
+                            with st.expander("Upsert errors"):
+                                for err in u["errors"][:10]:
+                                    st.write(f"- {err}")
+                        else:
+                            st.balloons()
+                    
+                    bundle_count = result.get("bundle_skus_count", 0)
+                    if bundle_count > 0:
+                        st.info(f"🎁 {bundle_count} SKUs flagged as bundle (from products table)")
                     else:
-                        st.balloons()
-                
-                bundle_count = result.get("bundle_skus_count", 0)
-                if bundle_count > 0:
-                    st.info(f"🎁 {bundle_count} SKUs flagged as bundle (from products table)")
-                else:
-                    st.info(
-                        "💡 Tip: Untuk flag SKU sebagai bundle, edit di Supabase Table Editor → "
-                        "table `products` → ubah `product_type` ke `bundle`. "
-                        "Lalu mapping component-nya di table `bundle_components`."
-                    )
-                    
-            except Exception as e:
-                st.error(f"❌ Push failed: {e}")
-                st.code(traceback.format_exc())
+                        st.info(
+                            "💡 Tip: Untuk flag SKU sebagai bundle, edit di Supabase Table Editor → "
+                            "table `products` → ubah `product_type` ke `bundle`. "
+                            "Lalu mapping component-nya di table `bundle_components`."
+                        )
+                        
+                except Exception as e:
+                    st.error(f"❌ Push failed: {e}")
+                    st.code(traceback.format_exc())
 
 if dry_run:
     st.info("☝️ Uncheck 'Dry run' biar bisa push beneran")
