@@ -148,16 +148,23 @@ def password_dialog(bundles, total_items):
                 if p:
                     st.success(f"📦 Products: **{p.get('new', 0)} new** SKUs added")
                 
+                # ============================================
+                # Push result (logic baru: NEW insert / EXISTING update status)
+                # ============================================
                 u = result.get("upsert", {})
                 if u:
                     st.success(
-                        f"✅ Inserted: **{u['orders_upserted']:,}** orders + "
-                        f"**{u['items_inserted']:,}** line items"
+                        f"✅ Order baru: **{u.get('new_orders', 0):,}** "
+                        f"(+ **{u.get('items_inserted', 0):,}** line items)"
                     )
                     
+                    col_a, col_b = st.columns(2)
+                    col_a.metric("🔄 Status updated", f"{u.get('status_updated', 0):,}")
+                    col_b.metric("⏭️ Status unchanged", f"{u.get('status_unchanged', 0):,}")
+                    
                     if u.get("errors"):
-                        st.error(f"⚠️ {len(u['errors'])} errors during upsert")
-                        with st.expander("Upsert errors"):
+                        st.error(f"⚠️ {len(u['errors'])} errors during push")
+                        with st.expander("Push errors"):
                             for err in u["errors"][:10]:
                                 st.write(f"- {err}")
                 
@@ -358,9 +365,10 @@ if not bundles:
     st.stop()
 
 st.info(
-    f"📤 Akan di-push:\n"
-    f"- **{len(bundles):,}** order headers ke table `orders`\n"
-    f"- **~{total_items:,}** line items ke table `order_items`\n"
+    f"📤 Yang akan diproses:\n"
+    f"- **{len(bundles):,}** order → yang **baru** di-insert full (header + items)\n"
+    f"- Order yang **udah ada** → cuma update status (kalau berubah)\n"
+    f"- Phone & manual fix di order lama **tidak** di-overwrite\n"
     f"- SKU baru (kalau ada) auto-insert ke `products` as 'simple'"
 )
 
