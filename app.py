@@ -146,7 +146,7 @@ def password_dialog(bundles, total_items):
                 
                 p = result.get("products", {})
                 if p:
-                    st.success(f"📦 Products: **{p.get('new', 0)} new** SKUs added")
+                    st.success(f"Products: **{p.get('new', 0)} new** SKUs added")
                 
                 # ============================================
                 # Push result (logic baru: NEW insert / EXISTING update status)
@@ -170,7 +170,7 @@ def password_dialog(bundles, total_items):
                 
                 bundle_count = result.get("bundle_skus_count", 0)
                 if bundle_count > 0:
-                    st.info(f"🎁 {bundle_count} SKUs flagged as bundle")
+                    st.info(f"{bundle_count} SKUs flagged as bundle")
                 
             except Exception as e:
                 st.error(f"❌ Push failed: {e}")
@@ -277,7 +277,7 @@ st.markdown("##### Load File")
 with st.spinner("Loading..."):
     try:
         df_raw = cleaner.load(uploaded_file)
-        st.write(f"📊 Loaded: **{len(df_raw):,}** rows × **{len(df_raw.columns)}** cols")
+        st.write(f"Loaded: **{len(df_raw):,}** rows × **{len(df_raw.columns)}** cols")
     except Exception as e:
         st.error(f"❌ Load error: {e}")
         st.code(traceback.format_exc())
@@ -292,7 +292,7 @@ st.markdown("##### Clean Data")
 with st.spinner("Cleaning..."):
     try:
         df_clean = cleaner.clean(df_raw)
-        st.write(f"🧹 After cleaning: **{len(df_clean):,}** rows ({len(df_raw) - len(df_clean):,} dropped)")
+        st.write(f"After cleaning: **{len(df_clean):,}** rows ({len(df_raw) - len(df_clean):,} dropped)")
     except Exception as e:
         st.error(f"❌ Clean error: {e}")
         st.code(traceback.format_exc())
@@ -307,9 +307,9 @@ with st.spinner("Grouping..."):
         total_items = sum(len(b.items) for b in bundles)
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("📦 Total Orders", f"{len(bundles):,}")
-        col2.metric("🛒 Total Line Items", f"{total_items:,}")
-        col3.metric("📊 Avg Items/Order", f"{total_items / max(len(bundles), 1):.2f}")
+        col1.metric("Total Orders", f"{len(bundles):,}")
+        col2.metric("Total Line Items", f"{total_items:,}")
+        col3.metric("Avg Items/Order", f"{total_items / max(len(bundles), 1):.2f}")
     except Exception as e:
         st.error(f"❌ Transform error: {e}")
         st.code(traceback.format_exc())
@@ -318,7 +318,7 @@ with st.spinner("Grouping..."):
 
 # Sample order preview
 if bundles:
-    with st.expander("✨ Sample order (first 1)"):
+    with st.expander("Sample order (first 1)"):
         sample = bundles[0]
         st.write("**Header:**")
         header_dict = sample.header.to_db_dict()
@@ -352,9 +352,9 @@ if bundles:
     
     st.markdown("##### Aggregated Stats")
     col1, col2, col3 = st.columns(3)
-    col1.metric("💰 Total Order Value", f"Rp {total_value:,}")
-    col2.metric("🚚 Net Shipping", f"Rp {total_shipping:,}")
-    col3.metric("🎯 Marketplace", cleaner.marketplace.title())
+    col1.metric("Total Order Value", f"Rp {total_value:,}")
+    col2.metric("Net Shipping", f"Rp {total_shipping:,}")
+    col3.metric("Marketplace", cleaner.marketplace.title())
 
 
 # Push section
@@ -365,7 +365,7 @@ if not bundles:
     st.stop()
 
 st.info(
-    f"📤 Yang akan diproses:\n"
+    f" Yang akan diproses:\n"
     f"- **{len(bundles):,}** order → yang **baru** di-insert full (header + items)\n"
     f"- Order yang **udah ada** → cuma update status (kalau berubah)\n"
     f"- Phone & manual fix di order lama **tidak** di-overwrite\n"
@@ -382,4 +382,4 @@ if st.button("Push to Database", type="primary", disabled=dry_run):
     password_dialog(bundles, total_items)
 
 if dry_run:
-    st.info("☝️ Uncheck 'Dry run' biar bisa push beneran")
+    st.info("Uncheck 'Dry run' biar bisa push beneran")
