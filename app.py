@@ -120,7 +120,7 @@ def password_dialog(bundles, total_items):
     if cancel:
         st.rerun()
     
-    # Auto-confirm kalau password udah ada (user tekan Enter) ATAU klik Confirm
+# Auto-confirm kalau password udah ada (user tekan Enter) ATAU klik Confirm
     if password_input or confirm:
         # Skip kalau password masih kosong (user belum input)
         if not password_input:
@@ -133,6 +133,20 @@ def password_dialog(bundles, total_items):
         if password_input != APP_UPLOAD_PASSWORD:
             st.error("❌ Password salah. Coba lagi.")
             return
+        
+        # ============================================
+        # GUARD: cegah double-push dari rerun Streamlit.
+        # Push cuma jalan SEKALI per batch (key = jumlah + order_id pertama+terakhir).
+        # ============================================
+        push_key = "pushed_" + str(len(bundles))
+        if bundles:
+            push_key += f"_{bundles[0].header.order_id}_{bundles[-1].header.order_id}"
+        
+        if st.session_state.get(push_key):
+            st.info("✔️ Batch ini udah di-push (skip biar gak dobel). Upload file baru buat push lagi.")
+            return
+        st.session_state[push_key] = True
+        
         with st.spinner(f"Pushing {len(bundles):,} orders..."):
             try:
                 result = push_to_supabase(bundles)
