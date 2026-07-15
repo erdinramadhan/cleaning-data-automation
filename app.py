@@ -134,22 +134,13 @@ def password_dialog(bundles, total_items):
             st.error("❌ Password salah. Coba lagi.")
             return
         
-        # ============================================
-        # GUARD: cegah double-push dari rerun Streamlit.
-        # Push cuma jalan SEKALI per batch (key = jumlah + order_id pertama+terakhir).
-        # ============================================
-        push_key = "pushed_" + str(len(bundles))
-        if bundles:
-            push_key += f"_{bundles[0].header.order_id}_{bundles[-1].header.order_id}"
+        # Push SEKALI, cache hasil (anti double-push dari rerun Streamlit)
+        if "push_result" not in st.session_state:
+            with st.spinner(f"Pushing {len(bundles):,} orders..."):
+                st.session_state["push_result"] = push_to_supabase(bundles)
         
-        if st.session_state.get(push_key):
-            st.info("✔️ Batch ini udah di-push (skip biar gak dobel). Upload file baru buat push lagi.")
-            return
-        st.session_state[push_key] = True
-        
-        with st.spinner(f"Pushing {len(bundles):,} orders..."):
-            try:
-                result = push_to_supabase(bundles)
+        try:
+                result = st.session_state["push_result"]
                 
                 v = result.get("validation", {})
                 if v.get("errors"):
@@ -186,9 +177,9 @@ def password_dialog(bundles, total_items):
                 if bundle_count > 0:
                     st.info(f"{bundle_count} SKUs flagged as bundle")
                 
-            except Exception as e:
-                st.error(f"❌ Push failed: {e}")
-                st.code(traceback.format_exc())
+        except Exception as e:
+            st.error(f"❌ Push failed: {e}")
+            st.code(traceback.format_exc())
 
 # ============================================================
 # Main: Upload section (always visible)
