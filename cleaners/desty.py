@@ -23,6 +23,7 @@ from .base import (
     safe_str,
     safe_int,
     normalize_phone_id,
+    resolve_sku,
 )
 from config import hash_pii
 from schemas import OrderHeader, OrderItem, OrderBundle, normalize_status
@@ -105,7 +106,7 @@ class DestyCleaner(BaseCleaner):
         df = df.drop_duplicates(subset=["ID Pesanan", "SKU"], keep="first")
         return df
 
-    def to_order_bundles(self, df: pd.DataFrame, source_file: str) -> list[OrderBundle]:
+    def to_order_bundles(self, df: pd.DataFrame, source_file: str, barcode_map: dict = None) -> list[OrderBundle]:
         """
         Desty field mapping:
           - Biaya Pengiriman = shipping fee (string "25,000")
@@ -177,8 +178,11 @@ class DestyCleaner(BaseCleaner):
                     # NOTE: items_discount (header) = order_voucher_total (order-level),
                     # bukan akumulasi item discount. Diskon produk cuma di item_seller_discount.
 
+                    raw_sku = safe_str(row.get("SKU"))
+                    resolved_sku, _ = resolve_sku(raw_sku, barcode_map)
+                    
                     item = OrderItem(
-                        sku=safe_str(row.get("SKU")),
+                        sku=resolved_sku,
                         product_name=safe_str(row.get("Produk")),
                         variation=None,
                         quantity=qty,

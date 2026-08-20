@@ -10,6 +10,7 @@ from .base import (
     parse_date_flexible,
     safe_str,
     safe_int,
+    resolve_sku,
 )
 from config import hash_pii
 from schemas import OrderHeader, OrderItem, OrderBundle, normalize_status
@@ -70,7 +71,7 @@ class TokopediaCleaner(BaseCleaner):
         
         return df
     
-    def to_order_bundles(self, df: pd.DataFrame, source_file: str) -> list[OrderBundle]:
+    def to_order_bundles(self, df: pd.DataFrame, source_file: str, barcode_map: dict = None) -> list[OrderBundle]:
         """
         Group by Order ID. Untuk tiap order:
           - First row → header (order-level fields: shipping, total, customer, etc)
@@ -141,9 +142,12 @@ class TokopediaCleaner(BaseCleaner):
                     
                     items_subtotal += unit_price * qty
                     items_discount += item_disc_total
-                    
+
+                    raw_sku = safe_str(row.get("Seller SKU"))
+                    resolved_sku, _ = resolve_sku(raw_sku, barcode_map)
+
                     item = OrderItem(
-                        sku=safe_str(row.get("Seller SKU")),
+                        sku=resolved_sku,
                         product_name=safe_str(row.get("Product Name")),
                         variation=safe_str(row.get("Variation")),
                         quantity=qty,

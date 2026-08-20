@@ -10,7 +10,8 @@ import traceback
 from pathlib import Path
 
 from cleaners import detect_marketplace, ALL_CLEANERS
-from loader import push_to_supabase, test_connection
+from cleaners.base import fetch_barcode_map
+from loader import push_to_supabase, test_connection, get_supabase
 from config import validate_config, APP_UPLOAD_PASSWORD
 
 
@@ -308,9 +309,20 @@ with st.spinner("Cleaning..."):
 st.markdown("##### Group by Order ID")
 with st.spinner("Grouping..."):
     try:
-        bundles = cleaner.to_order_bundles(df_clean, source_file=uploaded_file.name)
+        # Fetch barcode→SKU mapping 1x (buat resolve SKU yang jadi barcode)
+        try:
+            barcode_map = fetch_barcode_map(get_supabase())
+        except Exception as e:
+            st.warning(f"⚠️ Gagal load barcode mapping: {e}. Lanjut tanpa resolve barcode.")
+            barcode_map = {}
+
+        bundles = cleaner.to_order_bundles(
+            df_clean,
+            source_file=uploaded_file.name,
+            barcode_map=barcode_map,
+        )
         total_items = sum(len(b.items) for b in bundles)
-        
+
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Orders", f"{len(bundles):,}")
         col2.metric("Total Line Items", f"{total_items:,}")

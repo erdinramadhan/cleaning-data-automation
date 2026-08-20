@@ -186,3 +186,56 @@ def normalize_phone_id(value) -> Optional[str]:
         return "62" + digits
     else:
         return None
+
+
+
+# ============================================================
+# Barcode → SKU resolution (marketplace ganti SKU jadi barcode)
+# ============================================================
+
+def fetch_barcode_map(client) -> dict:
+    """
+    Fetch mapping {barcode: sku} dari products (1x, di-cache di memory).
+    client = Supabase client (dari loader.get_supabase()).
+    """
+    try:
+        resp = (
+            client.table("products")
+            .select("sku, barcode")
+            .not_.is_("barcode", "null")
+            .execute()
+        )
+        return {
+            str(r["barcode"]).strip(): r["sku"]
+            for r in (resp.data or [])
+            if r.get("barcode")
+        }
+    except Exception as e:
+        print(f"[barcode] Warning: gagal fetch barcode map: {e}")
+        return {}
+
+
+def resolve_sku(raw_value, barcode_map=None) -> tuple[str, bool]:
+    """
+    Resolve nilai kolom SKU → SKU asli.
+    Return: (sku, is_unknown)
+
+    Aturan:
+      - Ada huruf (A-Z)         → SKU format lama, pakai langsung
+      - Angka semua 12-13 digit → barcode → lookup mapping
+      - Selain itu              → unknown (flag buat cek manual)
+    """
+    s = str(raw_value).strip() if raw_value is not None else ""
+    if not s:
+        return s, True
+
+    if re.search(r"[A-Za-z]", s):
+        return s, False
+
+    if barcode_map and s.isdigit() and len(s) in (12, 13):
+        sku = barcode_map.get(s)
+        if sku:
+            return sku, False
+        return s, True
+
+    return s, True
