@@ -13,7 +13,12 @@ from cleaners import detect_marketplace, ALL_CLEANERS
 from cleaners.base import fetch_barcode_map
 from loader import push_to_supabase, test_connection, get_supabase
 from config import validate_config, APP_UPLOAD_PASSWORD
-
+from fulfillment import (
+    is_fulfillment_file,
+    load_file as load_fc_file,
+    parse as parse_fc,
+    push_fulfillment,
+)
 
 # ============================================================
 # Page config
@@ -181,6 +186,105 @@ def password_dialog(bundles, total_items):
         except Exception as e:
             st.error(f"❌ Push failed: {e}")
             st.code(traceback.format_exc())
+# ============================================================
+# Fulfillment center (tagihan vendor)
+# ============================================================
+@st.dialog("🔒 Confirm Push Tagihan Fulfillment")
+def fulfillment_password_dialog(records):
+    st.warning("Tagihan vendor akan di-push ke tabel fulfillment_costs.  \nMasukkan password untuk lanjut.")
+
+    password_input = st.text_input(
+        "Password", type="password", key="fc_password_input", placeholder="Masukin password..."
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        confirm = st.button("✅ Confirm Push", type="primary", use_container_width=True, key="fc_confirm")
+    with col2:
+        cancel = st.button("❌ Cancel", use_container_width=True, key="fc_cancel")
+
+    if cancel:
+        st.session_state.pop("fc_push_result", None)
+        st.rerun()
+
+    if not (password_input or confirm) or not password_input:
+        return
+    if not APP_UPLOAD_PASSWORD:
+        st.error("⚠️ APP_UPLOAD_PASSWORD belum di-set di Secrets.")
+        return
+    if password_input != APP_UPLOAD_PASSWORD:
+        st.error("❌ Password salah. Coba lagi.")
+        return
+
+    # Push SEKALI, hasil di-cache (anti double-push dari rerun)
+    if "fc_push_result" not in st.session_state:
+        with st.spinner(f"Pushing {len(records):,} tagihan..."):
+            try:
+                st.session_state["fc_push_result"] = push_fulfillment(records)
+            except Exception as e:
+                st.session_state["fc_push_result"] = {"_error": str(e), "_tb": traceback.format_exc()}
+
+    r = st.session_state["fc_push_result"]
+    if "_error" in r:
+        st.error(f"❌ Push failed: {r['_error']}")
+        st.code(r["_tb"])
+        return
+
+    st.success(f"✅ Tagihan baru: **{r['new']:,}** · diperbarui: **{r['updated']:,}**")
+    c1, c2 = st.columns(2)
+    c1.metric("🔗 Nyambung ke order", f"{r['linked']:,}")
+    c2.metric("⏳ Belum nyambung", f"{r['still_unlinked']:,}")
+    if r["errors"]:
+        st.error(f"⚠️ {len(r['errors'])} error")
+        with st.expander("Detail error"):
+            for err in r["errors"][:10]:
+                st.write(f"- {err}")
+
+
+def render_fulfillment_flow(uploaded_file):
+    st.markdown("**🏭 Tagihan Fulfillment Center**")
+
+    # Reset cache push kalau ganti file
+    file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+    if st.session_state.get("fc_file_id") != file_id:
+        st.session_state["fc_file_id"] = file_id
+        st.session_state.pop("fc_push_result", None)
+
+    try:
+        df = load_fc_file(uploaded_file)
+        records, warnings = parse_fc(df, uploaded_file.name)
+    except Exception as e:
+        st.error(f"❌ Gagal baca file vendor: {e}")
+        st.code(traceback.format_exc())
+        return
+
+    if not records:
+        st.warning("⚠️ Gak ada transaksi yang kebaca dari file ini")
+        return
+
+    total = sum(r["total_biaya"] for r in records)
+    tgl = [r["tanggal_transaksi"] for r in records if r["tanggal_transaksi"]]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🧾 Transaksi", f"{len(records):,}")
+    c2.metric("💸 Total Biaya", f"Rp {total:,}")
+    c3.metric("📅 Periode", f"{min(tgl)[:10]} → {max(tgl)[:10]}" if tgl else "-")
+
+    summary = (
+        pd.DataFrame(records)
+        .groupby("gudang", dropna=False)
+        .agg(transaksi=("no_transaksi_raw", "count"), total_biaya=("total_biaya", "sum"))
+        .reset_index()
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    if warnings:
+        st.warning(f"⚠️ {len(warnings)} catatan dari file")
+        with st.expander("Lihat catatan"):
+            for w in warnings[:50]:
+                st.write(f"- {w}")
+
+    if st.button("Push Tagihan ke Database", type="primary", key="fc_push_btn"):
+        st.session_state.pop("fc_push_result", None)
+        fulfillment_password_dialog(records)
 
 # ============================================================
 # Main: Upload section (always visible)
@@ -252,6 +356,11 @@ try:
         preview_df = pd.read_excel(uploaded_file, nrows=5)
     
     columns = preview_df.columns.tolist()
+
+    if is_fulfillment_file(columns):
+        render_fulfillment_flow(uploaded_file)
+        st.stop()
+
     cleaner = detect_marketplace(columns)
     
     if cleaner is None:
