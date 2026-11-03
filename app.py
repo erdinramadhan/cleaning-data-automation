@@ -169,9 +169,12 @@ def password_dialog(bundles, total_items):
                         f"(+ **{u.get('items_inserted', 0):,}** line items)"
                     )
                     
-                    col_a, col_b = st.columns(2)
-                    col_a.metric("🔄 Status updated", f"{u.get('status_updated', 0):,}")
-                    col_b.metric("⏭️ Status unchanged", f"{u.get('status_unchanged', 0):,}")
+                    col_a, col_b, col_c, col_d = st.columns(4)
+                    col_a.metric("Ambil alih dari API", f"{u.get('taken_over', 0):,}",
+                                 help="Order yang tadinya masuk lewat desty-sync (angka 0) → ditimpa data export")
+                    col_b.metric("🔄 Status updated", f"{u.get('status_updated', 0):,}")
+                    col_c.metric("Isi phone/nama/gudang", f"{u.get('filled', 0):,}")
+                    col_d.metric("⏭️ Tidak berubah", f"{u.get('status_unchanged', 0):,}")
                     
                     if u.get("errors"):
                         st.error(f"⚠️ {len(u['errors'])} errors during push")
@@ -493,15 +496,28 @@ if not bundles:
 st.info(
     f" Yang akan diproses:\n"
     f"- **{len(bundles):,}** order → yang **baru** di-insert full (header + items)\n"
-    f"- Order yang **udah ada** → cuma update status (kalau berubah)\n"
-    f"- Phone & manual fix di order lama **tidak** di-overwrite\n"
+    f"- Order yang masuk lewat **API (desty-sync)** → **diambil alih**: angka & items ditimpa data export\n"
+    f"- Order dari export yang **udah ada** → update status + isi phone/nama/gudang yang masih kosong\n"
+    f"- Angka & manual fix di order export lama **tidak** di-overwrite\n"
     f"- SKU baru (kalau ada) auto-insert ke `products` as 'simple'"
 )
 
 dry_run = st.checkbox(
-    "🧪 Dry run (skip insert)",
-    help="Validate aja tanpa write ke DB",
+    "🧪 Dry run (cek rencana dulu, tidak menulis ke DB)",
+    help="Hitung berapa order baru / diambil alih / update status tanpa menulis apa pun",
 )
+if dry_run:
+    with st.spinner("Menghitung rencana (read-only)..."):
+        try:
+            plan = push_to_supabase(bundles, dry_run=True).get("upsert", {})
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Order baru", f"{plan.get('new_orders', 0):,}")
+            c2.metric("Ambil alih dari API", f"{plan.get('taken_over', 0):,}")
+            c3.metric("Update status", f"{plan.get('status_updated', 0):,}")
+            c4.metric("Isi phone/nama/gudang", f"{plan.get('filled', 0):,}")
+            c5.metric("Line items ditulis", f"{plan.get('items_inserted', 0):,}")
+        except Exception as e:
+            st.error(f"❌ Gagal hitung rencana: {e}")
 
 # Push button — TRIGGER MODAL (popup)
 if st.button("Push to Database", type="primary", disabled=dry_run):

@@ -239,3 +239,28 @@ def resolve_sku(raw_value, barcode_map=None) -> tuple[str, bool]:
         return s, True
 
     return s, True
+
+# ============================================================
+# Gudang → 4 nilai kanonik (sama dengan yang dipakai DB & dashboard)
+# ============================================================
+GUDANG_KANONIK = [
+    ("depo kuta", "Depo Kuta Bali"),
+    ("gudang andalan", "Gudang Andalan"),
+    ("hea", "HEA Fulfillment"),
+    ("main warehouse", "Main Warehouse"),
+    ("main outlet", "Main Warehouse"),
+    ("shop location", "Main Warehouse"),
+    ("gudang jakarta", "Main Warehouse"),
+]
+
+
+def normalize_gudang(raw) -> Optional[str]:
+    """'Hea Fulfillment Center 1' → 'HEA Fulfillment', 'Shop Location' → 'Main Warehouse'.
+    Nilai yang tidak dikenal → None (biar ketahuan, bukan ditebak)."""
+    g = (safe_str(raw) or "").lower()
+    if not g:
+        return None
+    for prefix, canonical in GUDANG_KANONIK:
+        if g.startswith(prefix):
+            return canonical
+    return None

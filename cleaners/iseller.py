@@ -147,6 +147,7 @@ class IsellerCleaner(BaseCleaner):
                     insurance_fee=0,
                     order_total=order_total,
                     
+                    gudang="Main Warehouse",
                     shipping_provider=safe_str(first.get("Perusahaan Ekspedisi")),
                     shipping_city=safe_str(first.get("Kota Pengiriman")),
                     shipping_province=safe_str(first.get("Provinsi Penagihan")),

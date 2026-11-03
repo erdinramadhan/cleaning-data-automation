@@ -11,6 +11,7 @@ from .base import (
     safe_str,
     safe_int,
     resolve_sku,
+    normalize_gudang,
 )
 from config import hash_pii
 from schemas import OrderHeader, OrderItem, OrderBundle, normalize_status
@@ -183,6 +184,7 @@ class TokopediaCleaner(BaseCleaner):
                     insurance_fee=insurance_fee,
                     order_total=order_total,
                     
+                    gudang=normalize_gudang(first.get("Warehouse Name")),
                     shipping_provider=safe_str(first.get("Shipping Provider Name")),
                     shipping_city=safe_str(first.get("Regency and City")),
                     shipping_province=safe_str(first.get("Province")),

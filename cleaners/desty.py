@@ -24,6 +24,7 @@ from .base import (
     safe_int,
     normalize_phone_id,
     resolve_sku,
+    normalize_gudang,
 )
 from config import hash_pii
 from schemas import OrderHeader, OrderItem, OrderBundle, normalize_status
@@ -200,7 +201,10 @@ class DestyCleaner(BaseCleaner):
                     order_id=safe_str(order_id),
 
                     raw_status=safe_str(first.get("Status")),
-                    order_status=normalize_status(first.get("Status")),
+                    # 'Unpaid' di Desty = belum dibayar → 'unknown' (dashboard DB-B
+                    # membuang unknown, tapi MENGHITUNG pending sebagai omzet).
+                    order_status=("unknown" if (safe_str(first.get("Status")) or "").lower() == "unpaid"
+                                  else normalize_status(first.get("Status"))),
 
                     order_date=order_date,
                     paid_at=paid_at,
@@ -215,6 +219,7 @@ class DestyCleaner(BaseCleaner):
                     insurance_fee=insurance_fee,
                     order_total=order_total,
 
+                    gudang=normalize_gudang(first.get("Gudang")),
                     shipping_provider=safe_str(first.get("Metode Pengiriman")),
                     shipping_city=extract_city_from_address(safe_str(first.get("Alamat Pengiriman"))),
                     shipping_province=extract_province_from_address(safe_str(first.get("Alamat Pengiriman"))),

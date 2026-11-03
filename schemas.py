@@ -80,6 +80,7 @@ class OrderHeader(BaseModel):
     order_total: Optional[int] = Field(default=None, ge=0)
     
     # Logistics
+    gudang: Optional[str] = None  # Main Warehouse / Depo Kuta Bali / Gudang Andalan / HEA Fulfillment
     shipping_provider: Optional[str] = None
     shipping_city: Optional[str] = None
     shipping_province: Optional[str] = None

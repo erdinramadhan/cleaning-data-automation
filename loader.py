@@ -1,12 +1,19 @@
 """
 loader.py
 ---------
-Validate OrderBundle, terus push ke Supabase dengan logic:
+Validate OrderBundle, terus push ke Supabase (DB dashboard / DB-B) dengan logic:
   1. Auto-populate `products` table (SKU baru → insert as 'simple')
   2. Order BARU  → INSERT full (header + items)
-  3. Order EXISTING → UPDATE order_status DOANG (kalau berubah)
-     → phone, discount, items, harga TIDAK di-touch (data final).
-  4. Batch operations (chunk) biar cepet — bukan loop per-order.
+  3. Order EXISTING milik desty-api (source_file = 'desty-api', masuk lewat
+     desty-sync dengan ongkir/diskon/asuransi/no telp bolong) → DIAMBIL ALIH:
+     header ditimpa data export + items diganti isi export. raw_data respons API
+     dibiarkan. Setelah ini source_file = nama file export, jadi desty-sync tidak
+     menimpanya lagi.
+  4. Order EXISTING milik export → UPDATE order_status (kalau berubah) +
+     ISI customer_phone / customer_name / gudang yang masih kosong di DB.
+     Angka & items TIDAK di-touch (data final).
+  5. Batch operations (chunk) biar cepet — bukan loop per-order.
+  6. dry_run=True → cuma hitung rencana (baru / ambil alih / update), tidak menulis.
 
 Kenapa gini:
   - Order yang udah masuk DB = transaksi final. Yang berubah cuma STATUS
@@ -147,6 +154,14 @@ def get_bundle_skus() -> set[str]:
 # Fetch existing orders (buat split NEW vs EXISTING)
 # ============================================================
 
+API_SOURCE = "desty-api"   # source_file baris yang masuk lewat desty-sync
+FILL_IF_EMPTY = ("customer_phone", "customer_name", "gudang")
+# Saat ambil alih order API: kalau kolom ini KOSONG di export, nilai lama di DB
+# dipertahankan (mis. export Tokopedia tidak berisi no. telp — jangan dihapus).
+KEEP_IF_EMPTY = ("customer_phone", "customer_name", "customer_phone_hash", "customer_name_hash",
+                 "gudang", "shipping_provider", "shipping_city", "shipping_province", "paid_at")
+
+
 def fetch_existing_orders(marketplace: str, order_ids: list[str]) -> dict[str, dict]:
     """
     Fetch order yang UDAH ADA di DB untuk marketplace + list order_id ini.
@@ -165,7 +180,7 @@ def fetch_existing_orders(marketplace: str, order_ids: list[str]) -> dict[str, d
             response = (
                 client
                 .table("orders")
-                .select("id, order_id, order_status")
+                .select("id, order_id, order_status, source_file, " + ", ".join(KEEP_IF_EMPTY))
                 .eq("marketplace", marketplace)
                 .in_("order_id", chunk)
                 .execute()
@@ -174,6 +189,8 @@ def fetch_existing_orders(marketplace: str, order_ids: list[str]) -> dict[str, d
                 existing[str(row["order_id"])] = {
                     "id": row["id"],
                     "order_status": row["order_status"],
+                    "source_file": row.get("source_file"),
+                    **{f: row.get(f) for f in KEEP_IF_EMPTY},
                 }
         except Exception as e:
             print(f"Warning: fetch_existing_orders chunk failed: {e}")
@@ -186,151 +203,161 @@ def fetch_existing_orders(marketplace: str, order_ids: list[str]) -> dict[str, d
 # Main push flow (orders → order_items)
 # ============================================================
 
+
+
+def merge_items(items_dicts: list[dict]) -> list[dict]:
+    """Gabung item dengan SKU sama dalam 1 order (mis. barcode & SKU yang
+    ter-resolve jadi SKU yang sama) → qty/subtotal/diskon dijumlah.
+    order_items punya UNIQUE (order_id, sku); tanpa ini insert 1 chunk gagal."""
+    out, idx = [], {}
+    for d in items_dicts:
+        key = (d.get("order_id"), d.get("sku"))
+        if d.get("sku") and key in idx:
+            m = out[idx[key]]
+            for f in ("quantity", "subtotal", "item_seller_discount", "item_platform_discount"):
+                m[f] = (m.get(f) or 0) + (d.get(f) or 0)
+            m["is_bundle"] = m.get("is_bundle") or d.get("is_bundle")
+        else:
+            idx[key] = len(out)
+            out.append(dict(d))
+    return out
+
+
+def _items_for(bundle, order_pk: int, bundle_skus: set) -> list[dict]:
+    rows = []
+    for item in bundle.items:
+        d = item.to_db_dict(order_pk=order_pk)
+        if item.sku and item.sku in bundle_skus:
+            d["is_bundle"] = True
+        rows.append(d)
+    return merge_items(rows)
+
+
 def push_orders(
     bundles: list[OrderBundle],
     bundle_skus: set[str] = None,
+    dry_run: bool = False,
 ) -> dict:
     """
     Push orders dengan logic:
-      - EXISTING → UPDATE order_status doang (kalau beda)
-      - NEW      → INSERT header + items (batch)
+      - NEW                       → INSERT header + items (batch)
+      - EXISTING milik desty-api  → AMBIL ALIH: header ditimpa export, items diganti
+      - EXISTING milik export     → UPDATE order_status (kalau beda) + isi
+                                    phone/nama/gudang yang masih kosong
+
+    dry_run=True → tidak menulis apa pun, cuma isi angka rencana.
 
     Returns: {
-        "new_orders": int,
-        "status_updated": int,
-        "status_unchanged": int,
-        "items_inserted": int,
-        "errors": list,
+        "new_orders", "taken_over", "status_updated", "filled", "status_unchanged",
+        "items_inserted", "errors", "dry_run",
     }
     """
+    result = {
+        "new_orders": 0, "taken_over": 0, "status_updated": 0, "filled": 0,
+        "status_unchanged": 0, "items_inserted": 0, "errors": [], "dry_run": dry_run,
+    }
     if not bundles:
-        return {
-            "new_orders": 0, "status_updated": 0,
-            "status_unchanged": 0, "items_inserted": 0, "errors": [],
-        }
-
+        return result
     if bundle_skus is None:
         bundle_skus = set()
 
     client = get_supabase()
-    errors = []
+    errors = result["errors"]
 
     # Asumsi 1 upload = 1 marketplace (detect_marketplace di app.py)
     marketplace = bundles[0].header.marketplace
 
-    # ============================================
-    # Step 1: Fetch existing orders (1 batch query)
-    # ============================================
-    all_order_ids = [b.header.order_id for b in bundles]
-    existing = fetch_existing_orders(marketplace, all_order_ids)
+    # Step 1: fetch existing (1 batch query per chunk)
+    existing = fetch_existing_orders(marketplace, [b.header.order_id for b in bundles])
 
-    # ============================================
-    # Step 2: Split NEW vs EXISTING
-    # ============================================
-    new_bundles = []
-    status_updates = []  # list of (order_pk, new_status)
-    status_unchanged = 0
-
+    # Step 2: split
+    new_bundles, takeover, patches = [], [], []   # patches: (order_pk, {kolom: nilai})
     for bundle in bundles:
-        oid = bundle.header.order_id
-        if oid in existing:
-            # EXISTING → cek status beda?
-            db_status = existing[oid]["order_status"]
-            new_status = bundle.header.order_status
-            if new_status != db_status:
-                status_updates.append((existing[oid]["id"], new_status))
-            else:
-                status_unchanged += 1
-        else:
-            # NEW → insert full
+        ex = existing.get(bundle.header.order_id)
+        if ex is None:
             new_bundles.append(bundle)
+        elif ex.get("source_file") == API_SOURCE:
+            takeover.append((ex["id"], bundle, ex))
+        else:
+            patch = {}
+            if bundle.header.order_status != ex["order_status"]:
+                patch["order_status"] = bundle.header.order_status
+            filled = {f: getattr(bundle.header, f) for f in FILL_IF_EMPTY
+                      if not ex.get(f) and getattr(bundle.header, f)}
+            patch.update(filled)
+            if patch:
+                patches.append((ex["id"], patch, "order_status" in patch, bool(filled)))
+            else:
+                result["status_unchanged"] += 1
 
-    # ============================================
-    # Step 3: EXISTING → batch UPDATE order_status
-    # (hanya yang beda; per-row update, tapi cuma buat yg berubah)
-    # ============================================
-    status_updated = 0
-    for order_pk, new_status in status_updates:
+    if dry_run:
+        result["new_orders"] = len(new_bundles)
+        result["taken_over"] = len(takeover)
+        result["status_updated"] = sum(1 for p in patches if p[2])
+        result["filled"] = sum(1 for p in patches if p[3])
+        result["items_inserted"] = sum(len(merge_items([i.to_db_dict(order_pk=0) for i in b.items]))
+                                       for b in new_bundles + [b for _, b, _ in takeover])
+        return result
+
+    # Step 3: EXISTING milik export → patch status / isi yang kosong
+    for order_pk, patch, st_changed, filled in patches:
         try:
-            client.table("orders").update(
-                {"order_status": new_status}
-            ).eq("id", order_pk).execute()
-            status_updated += 1
+            client.table("orders").update(patch).eq("id", order_pk).execute()
+            result["status_updated"] += int(st_changed)
+            result["filled"] += int(filled)
         except Exception as e:
-            errors.append({"order_pk": order_pk, "error": f"status update: {e}"})
+            errors.append({"order_pk": order_pk, "error": f"update: {e}"})
 
-    # ============================================
-    # Step 4: NEW → batch INSERT header
-    # ============================================
-    new_orders = 0
-    items_inserted = 0
+    # Step 4: EXISTING milik desty-api → ambil alih (header + items)
+    for chunk in _chunked(takeover, CHUNK_SIZE):
+        try:
+            headers = []
+            for _, b, ex in chunk:
+                h = b.header.to_db_dict()
+                h.pop("raw_data", None)   # respons API di raw_data dipertahankan
+                for f in KEEP_IF_EMPTY:   # kosong di export → pakai nilai DB
+                    if h.get(f) in (None, "") and ex.get(f) not in (None, ""):
+                        h[f] = ex[f]
+                headers.append(h)
+            client.table("orders").upsert(headers, on_conflict="marketplace,order_id").execute()
+            pks = [pk for pk, _, _ in chunk]
+            client.table("order_items").delete().in_("order_id", pks).execute()
+            item_records = [r for pk, b, _ in chunk for r in _items_for(b, pk, bundle_skus)]
+            for item_chunk in _chunked(item_records, CHUNK_SIZE):
+                client.table("order_items").insert(item_chunk).execute()
+                result["items_inserted"] += len(item_chunk)
+            result["taken_over"] += len(chunk)
+        except Exception as e:
+            errors.append({"chunk_size": len(chunk), "error": f"ambil alih: {e}"})
 
-    if new_bundles:
-        # Build header records + keep ref ke bundle buat items nanti
-        for chunk in _chunked(new_bundles, CHUNK_SIZE):
-            header_records = [b.header.to_db_dict() for b in chunk]
+    # Step 5: NEW → batch INSERT header + items
+    for chunk in _chunked(new_bundles, CHUNK_SIZE):
+        try:
+            resp = client.table("orders").insert([b.header.to_db_dict() for b in chunk]).execute()
+            inserted_rows = resp.data or []
+            result["new_orders"] += len(inserted_rows)
+            oid_to_pk = {str(r["order_id"]): r["id"] for r in inserted_rows}
+            item_records = []
+            for b in chunk:
+                order_pk = oid_to_pk.get(b.header.order_id)
+                if order_pk is None:
+                    errors.append({"order_id": b.header.order_id, "error": "PK not found after header insert"})
+                    continue
+                item_records.extend(_items_for(b, order_pk, bundle_skus))
+            for item_chunk in _chunked(item_records, CHUNK_SIZE):
+                client.table("order_items").insert(item_chunk).execute()
+                result["items_inserted"] += len(item_chunk)
+        except Exception as e:
+            errors.append({"chunk_size": len(chunk), "error": f"header/items insert: {e}"})
 
-            try:
-                resp = (
-                    client
-                    .table("orders")
-                    .insert(header_records)
-                    .execute()
-                )
-                inserted_rows = resp.data or []
-                new_orders += len(inserted_rows)
-
-                # Map order_id → id (PK) dari response
-                # Response order sama dengan insert order (Supabase preserve order)
-                oid_to_pk = {str(r["order_id"]): r["id"] for r in inserted_rows}
-
-                # ============================================
-                # Step 5: NEW → batch INSERT items (per chunk)
-                # ============================================
-                item_records = []
-                for b in chunk:
-                    order_pk = oid_to_pk.get(b.header.order_id)
-                    if order_pk is None:
-                        errors.append({
-                            "order_id": b.header.order_id,
-                            "error": "PK not found after header insert",
-                        })
-                        continue
-
-                    for item in b.items:
-                        item_dict = item.to_db_dict(order_pk=order_pk)
-                        # Set is_bundle flag dari products table
-                        if item.sku and item.sku in bundle_skus:
-                            item_dict["is_bundle"] = True
-                        item_records.append(item_dict)
-
-                if item_records:
-                    # Insert items batch (chunk lagi kalau item > CHUNK_SIZE)
-                    for item_chunk in _chunked(item_records, CHUNK_SIZE):
-                        client.table("order_items").insert(item_chunk).execute()
-                        items_inserted += len(item_chunk)
-
-            except Exception as e:
-                errors.append({
-                    "chunk_size": len(chunk),
-                    "error": f"header/items insert: {e}",
-                })
-                continue
-
-    return {
-        "new_orders": new_orders,
-        "status_updated": status_updated,
-        "status_unchanged": status_unchanged,
-        "items_inserted": items_inserted,
-        "errors": errors,
-    }
+    return result
 
 
 # ============================================================
 # All-in-one pipeline
 # ============================================================
 
-def push_to_supabase(bundles: list[OrderBundle]) -> dict:
+def push_to_supabase(bundles: list[OrderBundle], dry_run: bool = False) -> dict:
     """
     Full pipeline:
       1. Validate
@@ -352,9 +379,10 @@ def push_to_supabase(bundles: list[OrderBundle]) -> dict:
     if not valid_bundles:
         return result
 
-    # 2. Auto-populate products
+    # 2. Auto-populate products (dilewati saat dry_run)
     sku_map = collect_skus_from_bundles(valid_bundles)
-    products_result = upsert_products(sku_map)
+    products_result = {"new": 0, "existing": 0, "errors": [], "skus_in_file": len(sku_map)} if dry_run \
+        else upsert_products(sku_map)
     result["products"] = products_result
 
     # 3. Fetch bundle SKUs (yang udah di-flag manual sebelumnya)
@@ -362,7 +390,7 @@ def push_to_supabase(bundles: list[OrderBundle]) -> dict:
     result["bundle_skus_count"] = len(bundle_skus)
 
     # 4. Push orders
-    push_result = push_orders(valid_bundles, bundle_skus=bundle_skus)
+    push_result = push_orders(valid_bundles, bundle_skus=bundle_skus, dry_run=dry_run)
     result["upsert"] = push_result
 
     return result
